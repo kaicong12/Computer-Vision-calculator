@@ -51,9 +51,6 @@ SHAPE_TYPE = {
 
 
 class InferenceCalculator:
-    """
-    Metrics are computed only for image, this class will be triggered one time for every image
-    """
     @staticmethod
     def _iou_polygon(polygonA, polygonB):
         if not polygonA.intersects(polygonB):

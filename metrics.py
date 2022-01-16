@@ -78,9 +78,6 @@ class InferenceCalculator:
 
     @staticmethod
     def _iou(ground_truth_arr, predictions_arr):
-        """
-        All grd_truth and predictions_arr are under the same image
-        """
         # group polygon by label and convert them into multipolygon
         grd_truth = InferenceCalculator._group_shape_by_label(ground_truth_arr)
         preds = InferenceCalculator._group_shape_by_label(predictions_arr)

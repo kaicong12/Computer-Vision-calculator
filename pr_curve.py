@@ -1,63 +1,89 @@
-from .metrics import InferenceCalculator
-import numpy as np
-import matplotlib.pyplot as plt
-
-def compute_metrics_per_inference(ground_truth_arr_by_image, preds_arr_by_image, iou_threshold, label_id=None):
-    image_list = list(ground_truth_arr_by_image.keys() | preds_arr_by_image.keys())
-
-    predictions_used = []
-    overall_acc_tp = []
-    overall_acc_fp = []
-    # compute acc_tp and acc_fp before combining, so that polygons across images would not interact
-    for img_id in image_list:
-        gt = ground_truth_arr_by_image.get(img_id, [])
-        preds = preds_arr_by_image.get(img_id, [])
-
-        if label_id is not None:
-            gt = [g for g in gt if g.label_id == label_id]
-            preds = [p for p in preds if p.label_id == label_id]
-
-        tmp_acc_tp, tmp_acc_fp, _ = InferenceCalculator._count_tp_fp(gt, preds, iou_threshold)
-
-        # label each predictions with a fp or tp label
-        predictions_used.extend(preds)
-        overall_acc_tp.extend(tmp_acc_tp)
-        overall_acc_fp.extend(tmp_acc_fp)
-
-    sort_idx = np.argsort([pred_shape.confidence for pred_shape in predictions_used])
-    sorted_acc_tp = list(np.array(overall_acc_tp)[sort_idx])
-    sorted_acc_fp = list(np.array(overall_acc_fp)[sort_idx])
-
-    tp = np.sum(sorted_acc_tp)
-    acc_tp = np.cumsum(sorted_acc_tp)
-    acc_fp = np.cumsum(sorted_acc_fp)
-
-    return acc_tp, acc_fp, tp
-
-
-def plot_pr_curve(ground_truth_by_image, predictions_by_image, iou_threshold, label_id=None):
+def pr_curve(eval_results, mode, label_id_map, num_points, smooth=True):
     """
-    Compute PR Curve on overall task level using annotations from each image
-    :param ground_truth_by_image: Ground truth annotation dictionary, with image_id as key
-    :param predictions_by_image: Predictions dictionary, with image_id as key
-    :param iou_threshold: Iou Threshold to compute TP
-    :param label_id: If specified, will only compute metrics based on annotation of this label id
-    :return:
+    eval_results -> precision and recall by labels
+    mode = "avg" -> average precision and recall values over classes
+    mode = "wavg" -> weighted average ...
+    label_id_map dict(int) -> enumerate of each label_id in the dataset to get the idx of this label in eval_results
+    num_points int -> number of threshold on the pr_curve x-axis
+    otherwise, mode should be an integer denoting the class index
+
+    Return: precision, recall array for the mode specified
     """
-    acc_tp, acc_fp, tp = InferenceCalculator.compute_metrics_per_inference(
-        ground_truth_by_image, predictions_by_image,
-        iou_threshold, label_id
-    )
-    base_precision_arr = acc_tp / (acc_tp + acc_fp)
-    ground_truth_len = 0
-    for annotations in predictions_by_image.values():
-        for anno_shape in annotations:
-            if label_id is not None:
-                if anno_shape.label_id == label_id:
-                    ground_truth_len += 1
+    recalls = [eval_results_i["recall_arr"] for eval_results_i in eval_results]
+    precisions = [eval_results_i["precision_arr"] for eval_results_i in eval_results]
+    conf_scores = [eval_results_i["conf_scores"] for eval_results_i in eval_results]
+
+    if isinstance(mode, int):
+        label_idx = label_id_map.get(mode, None)
+        if label_idx is None:
+            raise ValidationError('Label ID not mapped to label_id_map')
+
+        recalls = [recalls[label_idx]]
+        precisions = [precisions[label_idx]]
+        conf_scores = [conf_scores[label_idx]]
+
+    # Get max and min confidence scores
+    min_score = 0
+    max_score = 0
+    for conf_scores_i in conf_scores:
+        for score in conf_scores_i:
+            min_score = min(score, min_score)
+            max_score - max(score, max_score)
+
+    # Calculate precision and recall values over multiple points
+    score_range = np.linspace(
+        start=min_score, stop=max_score,
+        endpoint=True, num=num_points)
+
+    recalls_at_scores = []
+    precisions_at_scores = []
+    for threshold in score_range:
+        recalls_at_score_i = []
+        precisions_at_score_i = []
+        for recalls_i, precisions_i, conf_scores_i in \
+                zip(recalls, precisions, conf_scores):
+            if recalls_i.shape[1] == 0:
+                # if this label does not have annotation, treat recall and precision as 0
+                recalls_at_score_i.append(0)
+                precisions_at_score_i.append(0)
             else:
-                ground_truth_len += 1
-    base_recall_arr = acc_tp / ground_truth_len
+                mask = (conf_scores_i <= threshold)
+                if not mask.any():
+                    i = len(conf_scores_i) - 1
+                else:
+                    i = mask.argmax()
 
-    plt.plot(base_recall_arr, base_precision_arr)
-    plt.show()
+                recalls_at_score_i.append(recalls_i[0][i])
+                precisions_at_score_i.append(
+                    precisions_i[0][i:].max() if smooth
+                    else precisions_i[0][i]
+                )
+
+            # Aggregate
+        if mode in ["avg", "wavg"]:
+            if mode == "avg":
+                weights = np.array([1] * len(recalls))
+            else:
+                weights = np.array([
+                    eval_results_i["num_gts"]
+                    for eval_results_i in eval_results
+                ])
+
+            recalls_at_score_i = np.array(recalls_at_score_i)
+            precisions_at_score_i = np.array(precisions_at_score_i)
+
+            # Calculate weighted sum
+            assert len(recalls_at_score_i) == len(precisions_at_score_i) == len(weights)
+            recall_at_score_i = (recalls_at_score_i * weights).sum() / weights.sum()
+            precision_at_score_i = (precisions_at_score_i * weights).sum() / weights.sum()
+
+        else:
+            assert isinstance(mode, int)
+            assert len(recalls_at_score_i) == len(precisions_at_score_i) == 1
+            recall_at_score_i = recalls_at_score_i[0]
+            precision_at_score_i = precisions_at_score_i[0]
+
+        recalls_at_scores.append(recall_at_score_i)
+        precisions_at_scores.append(precision_at_score_i)
+
+    return recalls_at_scores, precisions_at_scores

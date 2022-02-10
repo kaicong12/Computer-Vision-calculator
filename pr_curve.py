@@ -1,3 +1,6 @@
+import numpy as np
+
+
 def pr_curve(eval_results, mode, label_id_map, num_points, smooth=True):
     """
     eval_results -> precision and recall by labels
@@ -16,7 +19,7 @@ def pr_curve(eval_results, mode, label_id_map, num_points, smooth=True):
     if isinstance(mode, int):
         label_idx = label_id_map.get(mode, None)
         if label_idx is None:
-            raise ValidationError('Label ID not mapped to label_id_map')
+            raise Exception('Label ID not mapped to label_id_map')
 
         recalls = [recalls[label_idx]]
         precisions = [precisions[label_idx]]

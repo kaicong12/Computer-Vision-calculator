@@ -1,3 +1,7 @@
+import numpy as np
+from multiprocessing import Pool
+
+
 class InferenceCalculator2:
     @staticmethod
     def get_cls_results(db_inference, det_results, ground_truths, class_id, image_id=None):

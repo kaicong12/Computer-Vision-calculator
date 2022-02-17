@@ -1,5 +1,5 @@
 import numpy as np
-from .metrics import InferenceCalculator2
+from .metrics import InferenceCalculator
 
 
 def confusion_matrix_per_image(label_id_map, confusion_matrix, ground_truth_arr, preds_arr, iou_threshold):
@@ -12,8 +12,7 @@ def confusion_matrix_per_image(label_id_map, confusion_matrix, ground_truth_arr,
     for pred_idx, pred_shape in enumerate(preds_arr):
         match_ground_truth = 0
         for gt_idx, gt_shape in enumerate(ground_truth_arr):
-            if iou_matrix[
-                pred_idx, gt_idx] >= iou_threshold and pred_shape.seen == 0:  # one prediction can only belong to one ground truth
+            if iou_matrix[pred_idx, gt_idx] >= iou_threshold and pred_shape.seen == 0:  # one prediction can only belong to one ground truth
                 match_ground_truth += 1
                 # mark out this pred shape to prevent this from getting reused in the next round
                 pred_shape.seen = 1

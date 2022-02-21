@@ -2,13 +2,12 @@ import numpy as np
 from .metrics import InferenceCalculator
 
 
-# this is a rebased test
 def confusion_matrix_per_image(label_id_map, confusion_matrix, ground_truth_arr, preds_arr, iou_threshold):
     """
     When returning labels in viewset make sure the labels are returned in ascending id
     """
     true_positives = np.zeros(len(ground_truth_arr))
-    iou_matrix = InferenceCalculator2.polygon_overlaps(preds_arr, ground_truth_arr)
+    iou_matrix = InferenceCalculator.polygon_overlaps(preds_arr, ground_truth_arr)
 
     for pred_idx, pred_shape in enumerate(preds_arr):
         match_ground_truth = 0
@@ -53,10 +52,9 @@ def confusion_matrix(ground_truth, predictions, label_id_map, iou_threshold):
     for img_id in image_list:
         gt = ground_truth.get(img_id, [])
         preds = predictions.get(img_id, [])
-        InferenceCalculator2.confusion_matrix_per_image(
+        InferenceCalculator.confusion_matrix_per_image(
             label_id_map, confusion_matrix,
             gt, preds, iou_threshold
         )
 
-    # This is a rebase in main, representing some changes
     return confusion_matrix

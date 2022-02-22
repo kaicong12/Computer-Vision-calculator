@@ -4,26 +4,22 @@ from multiprocessing import Pool
 
 class InferenceCalculator:
     @staticmethod
-    def get_cls_results(db_inference, det_results, ground_truths, class_id, image_id=None):
+    def get_cls_results(det_results, ground_truths, class_id, image_list):
         """Get det results and gt information of a certain class.
 
         Args:
             predictions dict([list]): dict key represents img_id, value is the list of all annotations under this image
             ground_truths: same as predictions
             class_id (int): ID of a specific class.
+            image_list = list of image to query annotations from
 
         Returns:
             list[ndarray(shape)]: outer list represents image, detected bboxes, gt bboxes
         """
         # check if predictions and ground truth dict share the same image_id keys
-        db_data = db_inference.storage_task.data
-        images = models.DataImage.objects.filter(data=db_data).values_list('image_id', flat=True)
         cls_dets = []
         cls_gts = []
-
-        for img_id in images:
-            if image_id is not None and img_id != image_id:
-                continue
+        for img_id in image_list:
             tmp_detections = []
             tmp_gt = []
             img_detections = det_results.get(img_id, [])
@@ -96,7 +92,7 @@ class InferenceCalculator:
             fp[...] = 1
             return tp, fp, preds_iou
 
-        ious = InferenceCalculator2.polygon_overlaps(predictions, ground_truth)
+        ious = InferenceCalculator.polygon_overlaps(predictions, ground_truth)
         # sort all detections by scores in descending order
         sort_idx = np.argsort(-np.array([shape.confidence for shape in predictions]))
 
@@ -119,89 +115,58 @@ class InferenceCalculator:
             # 3. it matches no gt, tp = 0, fp = 1
             if matched_gt >= 0:
                 gt_covered[matched_gt] = 1
-                preds_iou[i] = max_iou
+                preds_iou[0, i] = max_iou
                 tp[0, i] = 1
             else:
                 fp[0, i] = 1
-
         return tp, fp, preds_iou
 
-
     @staticmethod
-    def eval_map(db_inference, predictions, ground_truths, label_id_map, iou_thr=0.5, image_id=None, nproc=4):
-        """
-        Evaluate mAP of a dataset
+    def compute_metric(prediction_arr, gt_arr, tp, fp, iou, mode):
+        """Evaluate metric on image level, all annotations here belong to the same image"""
+        num_preds, num_gts = len(prediction_arr), len(gt_arr)
+        sort_idx = np.argsort(-np.array([shape.confidence for shape in prediction_arr]))
+        curr_tp = np.array(tp)[:, sort_idx]
+        curr_fp = np.array(fp)[:, sort_idx]
+        curr_iou = np.array(iou)[:, sort_idx][0]
+        curr_conf = np.array([shape.confidence for shape in prediction_arr])[sort_idx]
 
-        predictions dict([list]): dict key represents img_id, value is the list of all annotations under this image
-        ground_truths: same as predictions
-        label_id_map, dict(int): same label_id_map to be reused in plot_pr_curve
-        nproc (int): Processes used for computing TP and FP.
-            Default: 4.
-        mode (str): 'area' or '11points', 'area' means calculating the area
-            under precision-recall curve, '11points' means calculating
-            the average precision of recalls at [0, 0.1, ..., 1]
+        if num_preds == 0 or num_gts == 0:  # if one metric is -1, everything should be -1
+            curr_conf = np.array([-1])
+            curr_iou = np.array([-1])
 
-    Returns:
-        tuple: ([dict, dict, ...]) each dict represents the metrics for the specific label across all images
-        """
-        num_imgs = len(ground_truths)
-        pool = Pool(nproc)
-        eval_results = []
-
-        for c in list(label_id_map.keys())[1:]:  # start from idx 1 becasue idx 0 is the background
-            # get all annotations of this class by image
-            class_preds, class_gt = InferenceCalculator2.get_cls_results(db_inference, predictions, ground_truths, c, image_id)
-
-            # compute tp and fp for each image with multiple processes
-            tpfp = pool.starmap(
-                InferenceCalculator2.tpfp_imagenet,
-                zip(class_preds, class_gt, [iou_thr for _ in range(num_imgs)]))
-            tp, fp, preds_iou = tuple(zip(*tpfp))
-
-            # calculate how many ground_truth of this class among all images
-            num_gts = np.zeros(1, dtype=int)
-            for j, bbox in enumerate(class_gt):
-                num_gts[0] += len(bbox)
-
-            # sort all det bboxes by score, also sort tp and fp
-            # flatten 2D ground truth array for convenience, and sort by prediction shape confidence
-            flattened_class_preds = []
-            for labelshape in class_preds:
-                flattened_class_preds.extend(labelshape)
-
-            num_preds = len(flattened_class_preds)
-            sort_idx = np.argsort(-np.array([shape.confidence for shape in flattened_class_preds]))
-            tp = np.hstack(tp)[:, sort_idx]
-            fp = np.hstack(fp)[:, sort_idx]
-            label_ious = np.hstack(preds_iou)[:, sort_idx][0]
-            confidence = np.array([shape.confidence for shape in flattened_class_preds])[sort_idx]
-
-            if num_preds == 0:
-                confidence = np.array([-1])
-                label_ious = np.array([-1])
-            elif num_gts == 0:
-                label_ious = np.array([-1])
-
-            # calculate abs recall and precision values
-            abs_tp = np.sum(tp)
-            if num_preds == 0 or num_gts[0] == 0:
-                abs_recall, abs_precision, abs_f1 = -1, -1, -1
+        # calculate abs recall and precision values
+        abs_tp = np.sum(curr_tp)
+        if num_preds == 0 or num_gts == 0:
+            abs_recall, abs_precision, abs_f1 = -1, -1, -1
+        elif num_preds == 0:
+            abs_precision, abs_recall, abs_f1 = -1, 0, -1
+        elif num_gts == 0:
+            abs_precision, abs_recall, abs_f1 = 0, -1, -1
+        else:
+            abs_recall = abs_tp / num_gts
+            abs_precision = abs_tp / num_preds
+            if abs_recall == 0 or abs_precision == 0:
+                abs_f1 = 0
             else:
-                abs_recall = abs_tp/num_gts[0]
-                abs_precision = abs_tp/num_preds
-                if abs_recall == 0 or abs_precision == 0:
-                    abs_f1 = 0
-                else:
-                    abs_f1 = 2*(abs_precision*abs_recall)/(abs_precision+abs_recall)
+                abs_f1 = 2 * (abs_precision * abs_recall) / (abs_precision + abs_recall)
 
-            # calculate recall and precision with tp and fp
-            tp = np.cumsum(tp, axis=1)
-            fp = np.cumsum(fp, axis=1)
-            eps = np.finfo(np.float32).eps
-            recalls = tp / np.maximum(num_gts[:, np.newaxis], eps)[0, :]  # (M,)
-            precisions = tp / np.maximum((tp + fp), eps)[0, :]  # (M,)
+        curr_tp = np.cumsum(curr_tp, axis=1)
+        curr_fp = np.cumsum(curr_fp, axis=1)
+        eps = np.finfo(np.float32).eps
+        recalls = curr_tp / np.maximum(np.array([num_gts])[:, np.newaxis], eps)[0, :]  # (M,)
+        precisions = curr_tp / np.maximum((curr_tp + curr_fp), eps)[0, :]  # (M,)
 
-            eval_results.append({
+        if mode == 'image':
+            data = {
+                'abs_recall': abs_recall,
+                'abs_precision': abs_precision,
+                'abs_f1': abs_f1,
+                'iou': curr_iou,
+                'conf_scores': curr_conf,
+            }
+        elif mode == 'inference':
+            data = {
                 'num_gts': num_gts,
                 'num_dets': num_preds,
                 'abs_recall': abs_recall,
@@ -209,11 +174,107 @@ class InferenceCalculator:
                 'abs_f1': abs_f1,
                 'recall_arr': recalls,
                 'precision_arr': precisions,
-                'iou': label_ious,
-                'conf_scores': confidence,
-            })
-        pool.close()
+                'iou': curr_iou,
+                'conf_scores': curr_conf,
+            }
 
+        return data
+
+    @staticmethod
+    def compute_inference_metric(image_list, image_metrics,
+                                   predictions, ground_truth, tp, fp, ious):
+        """
+        Evaluate metrics for entire inference and on individual image level
+        All annotations here are of the same class
+
+        Args:
+            image_list [list] -> an array which shows img_id in the same sequence as annotations
+            predictions list([list]) -> outer list indicate image, inner list contains predictions under this image
+            ground_truth -> format same as predictions, but inner list contains gt
+            tp, fp -> same as above
+        """
+        assert len(predictions) == len(ground_truth) == len(tp) == len(fp) == len(ious)
+        curr_idx = 0  # since dictionary does not return key in sequence, identify current image using idx
+        # compute metric for this label for individual image
+        while curr_idx < len(predictions):
+            # curr_<metric> here refers to the metric under current image
+            curr_preds = predictions[curr_idx]
+            curr_gt = ground_truth[curr_idx]
+            curr_tp = tp[curr_idx]
+            curr_fp = fp[curr_idx]
+            curr_iou = ious[curr_idx]
+            image_label_eval_results = InferenceCalculator.compute_metric(
+                curr_preds, curr_gt, curr_tp, curr_fp, curr_iou, mode='image'
+            )
+
+            curr_image = image_list[curr_idx]
+            if curr_image not in image_metrics:
+                image_metrics[curr_image] = [image_label_eval_results]
+            else:
+                image_metrics[curr_image].append(image_label_eval_results)
+
+            curr_idx += 1
+
+        # sort all det bboxes by score, also sort tp and fp
+        # flatten 2D ground truth array for convenience, and sort by prediction shape confidence
+        flattened_class_preds = []
+        flattened_class_gt = []
+        for pred_shape, gt_shape in zip(predictions, ground_truth):
+            flattened_class_preds.extend(pred_shape)
+            flattened_class_gt.extend(gt_shape)
+
+        inference_tp = np.hstack(tp)
+        inference_fp = np.hstack(fp)
+        inference_ious = np.hstack(ious)
+        inference_label_eval_results = InferenceCalculator.compute_metric(
+            flattened_class_preds, flattened_class_gt,
+            inference_tp, inference_fp, inference_ious, mode='inference'
+        )
+
+        return inference_label_eval_results
+
+
+    @staticmethod
+    def eval_map(predictions, ground_truths, label_id_map, image_list, iou_thr, nproc=4):
+        """
+        Evaluate mAP of a dataset
+        Args:
+            predictions dict([list]): dict key represents img_id, value is the list of all annotations under this image
+            ground_truths: same as predictions
+            label_id_map, dict(int): same label_id_map to be reused in plot_pr_curve
+            nproc (int): Processes used for computing TP and FP.
+                Default: 4.
+            mode (str): 'area' or '11points', 'area' means calculating the area
+                under precision-recall curve, '11points' means calculating
+                the average precision of recalls at [0, 0.1, ..., 1]
+
+        Returns:
+            tuple: ([dict, dict, ...]) each dict represents the metrics for the specific label across all images
+        """
+        num_imgs = len(image_list)
+        pool = Pool(nproc)
+        eval_results = []
+        image_level_metrics = {}
+
+        label_list = sorted(label_id_map.keys())[1:]
+        for c in label_list:  # start from idx 1 because idx 0 is the background
+            # get all annotations of this class by image
+            class_preds, class_gt = InferenceCalculator.get_cls_results(predictions, ground_truths, c, image_list)
+
+            # compute tp and fp for each image with multiple processes
+            tpfp = pool.starmap(
+                InferenceCalculator.tpfp_imagenet,
+                tuple(zip(class_preds, class_gt, [iou_thr for _ in range(num_imgs)])))
+            tp, fp, preds_iou = tuple(zip(*tpfp))
+
+            # compute image level and inference level metrics in one function to avoid repeated calling
+            inference_label_eval_results = InferenceCalculator.compute_inference_metric(
+                image_list, image_level_metrics,
+                class_preds, class_gt, tp, fp, preds_iou
+            )
+
+            eval_results.append(inference_label_eval_results)
+        pool.close()
         assert len(eval_results) == len(label_id_map) - 1  # minus 1 because of background
 
-        return eval_results
+        return eval_results, image_level_metrics

@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
+BOX_COLORS = ["red", "orange", "green", "yellow", "white", "purple"]
 def plot_rectangles(rectangle_array):
     """
     Take in an array of arrays in the format of [x1, y1, x2, y2] ang plot them on a white background
@@ -40,7 +41,9 @@ def plot_rectangles(rectangle_array):
     
     img = Image.new("RGB", (w, h))
     img1 = ImageDraw.Draw(img)
-    for rect in rectangle_array:
+    for idx, rect in enumerate(rectangle_array):
         new_rect = list(map(int, rect))[:-1]  # leave out the confidence score when plotting
-        img1.rectangle(new_rect, outline ="red")
+        color_idx = idx % len(BOX_COLORS)
+        color = BOX_COLORS[color_idx]
+        img1.rectangle(new_rect, outline = color)
     img.show()

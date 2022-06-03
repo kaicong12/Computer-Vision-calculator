@@ -1,2 +1,4 @@
 shapely
 numpy
+opencv-python==4.5.5.64
+Pillow==9.1.1

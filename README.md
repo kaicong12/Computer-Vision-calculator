@@ -16,9 +16,9 @@ Precision is the ability of a model to identify **only** the relevant objects. I
 <p align="center"> 
 <img src="https://latex.codecogs.com/gif.latex?%5Ctext%7BPrecision%7D%20%3D%20%5Cfrac%7B%5Ctext%7BTP%7D%7D%7B%5Ctext%7BTP%7D&plus;%5Ctext%7BFP%7D%7D%3D%5Cfrac%7B%5Ctext%7BTP%7D%7D%7B%5Ctext%7Ball%20detections%7D%7D">
 </p>
-<!---
+
 \text{Precision} = \frac{\text{TP}}{\text{TP}+\text{FP}}=\frac{\text{TP}}{\text{all detections}}
---->
+
 
 ### Recall 
 
@@ -27,9 +27,9 @@ Recall is the ability of a model to find all the relevant cases (all ground trut
 <p align="center"> 
 <img src="https://latex.codecogs.com/gif.latex?%5Ctext%7BRecall%7D%20%3D%20%5Cfrac%7B%5Ctext%7BTP%7D%7D%7B%5Ctext%7BTP%7D&plus;%5Ctext%7BFN%7D%7D%3D%5Cfrac%7B%5Ctext%7BTP%7D%7D%7B%5Ctext%7Ball%20ground%20truths%7D%7D">
 </p>
-<!--- 
+
 \text{Recall} = \frac{\text{TP}}{\text{TP}+\text{FN}}=\frac{\text{TP}}{\text{all ground truths}}
---->
+
 
 ### PR curve (TBC)
 
